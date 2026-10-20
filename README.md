@@ -16,7 +16,7 @@ Built with **Next.js, Cloudflare Workers AI, LangGraph.js, and Tavily**, the app
 
 <!-- Home UI Screenshot: Replace this comment with your dashboard screenshot -->
 
-![MediGuide AI Home Dashboard](docs/screenshots/home-ui.png)
+![MediGuide AI Home Dashboard](screenshots/dashboard.png)
 
 The dashboard provides a central entry point to the text-based health assistant and in-app AI calling interface.
 
@@ -24,7 +24,7 @@ The dashboard provides a central entry point to the text-based health assistant 
 
 <!-- Chat UI Screenshot: Replace this comment with your chat interface screenshot -->
 
-![MediGuide AI Chat Interface](docs/screenshots/chat-ui.png)
+![MediGuide AI Chat Interface](screenshots/chatbox.png)
 
 The chat interface allows users to ask health-related questions, view conversational responses, and access relevant medical source links when available.
 
@@ -32,7 +32,7 @@ The chat interface allows users to ask health-related questions, view conversati
 
 <!-- Call UI Screenshot: Replace this comment with your AI calling screenshot -->
 
-![MediGuide AI Call Interface](docs/screenshots/call-ui.png)
+![MediGuide AI Call Interface](screenshots/call.png)
 
 The voice interface uses browser speech recognition and speech synthesis to support spoken questions and audio responses in English (India), subject to browser and device support.
 
@@ -40,7 +40,7 @@ The voice interface uses browser speech recognition and speech synthesis to supp
 
 <!-- Medical Response Screenshot: Replace this comment with a screenshot showing a response and its sources -->
 
-![Medical Response and Sources](docs/screenshots/medical-response.png)
+![Medical Response and Sources](screenshots/chat.png)
 
 Medical queries can be routed through the medical-source search workflow before response generation. Source links are displayed when relevant sources are returned.
 
