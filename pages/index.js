@@ -1,6 +1,6 @@
 
 import Head from "next/head";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 const features = [
   {
@@ -27,24 +27,137 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [callActive, setCallActive] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceLanguage, setVoiceLanguage] = useState("en-IN");
+  const [callError, setCallError] = useState("");
+  const recognitionRef = useRef(null);
+  
+  function startAICall() {
+    if (!("speechSynthesis" in window)) {
+      setCallError("Speech output is not supported in this browser.");
+      return;
+    }
+  
+    setCallError("");
+    setCallActive(true);
+  }
+  
+  function endAICall() {
+    if (recognitionRef.current) {
+      recognitionRef.current.onresult = null;
+      recognitionRef.current.onerror = null;
+      recognitionRef.current.onend = null;
+      recognitionRef.current.abort();
+      recognitionRef.current = null;
+    }
+  
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+  
+    setListening(false);
+    setCallActive(false);
+    setCallError("");
+  }
+  
+  function startListening() {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+  
+    if (!SpeechRecognition) {
+      setCallError(
+        "Speech recognition is not supported in this browser. Try a supported browser such as Chrome."
+      );
+      return;
+    }
+  
+    if (loading || listening) return;
+  
+    setCallError("");
+  
+    const recognition = new SpeechRecognition();
+  
+    recognition.lang = voiceLanguage;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+  
+    recognition.onstart = () => {
+      setListening(true);
+    };
+  
+    recognition.onresult = async (event) => {
+      const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+  
+      if (!transcript) {
+        setCallError("I couldn't recognize your speech. Please try again.");
+        return;
+      }
+  
+      setInput(transcript);
+      await sendMessage(transcript, true);
+    };
+  
+    recognition.onerror = (event) => {
+      if (event.error === "not-allowed") {
+        setCallError(
+          "Microphone access was denied. Allow microphone access in your browser settings."
+        );
+      } else if (event.error !== "aborted" && event.error !== "no-speech") {
+        setCallError("Voice input failed. Please try again.");
+      } else if (event.error === "no-speech") {
+        setCallError("No speech detected. Tap the microphone and try again.");
+      }
+  
+      setListening(false);
+    };
+  
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+  
+    recognitionRef.current = recognition;
+  
+    try {
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+      setListening(false);
+      setCallError("Unable to start the microphone. Please try again.");
+    }
+  }
+  
+  function speakResponse(text) {
+    if (!("speechSynthesis" in window)) return;
+  
+    window.speechSynthesis.cancel();
+  
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = voiceLanguage;
+    utterance.rate = 1;
+    utterance.pitch = 1;
+  
+    window.speechSynthesis.speak(utterance);
+  }
 
-  async function sendMessage(event) {
-    event.preventDefault();
-
-    const text = input.trim();
-
+  async function sendMessage(textOverride = input, speakResponseEnabled = false) {
+    const text = textOverride.trim();
+  
     if (!text || loading) return;
-
+  
     const updatedMessages = [
       ...messages,
       { role: "user", content: text },
     ];
-
+  
     setMessages(updatedMessages);
     setInput("");
     setError("");
+    setCallError("");
     setLoading(true);
-
+  
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
@@ -55,17 +168,17 @@ export default function Home() {
           messages: updatedMessages,
         }),
       });
-
+  
       const data = await response.json();
-
+  
       if (!response.ok) {
         throw new Error(data.error || "Unable to get an AI response.");
       }
-
+  
       if (!data.reply) {
         throw new Error("The AI returned an empty response.");
       }
-
+  
       setMessages((current) => [
         ...current,
         {
@@ -73,11 +186,19 @@ export default function Home() {
           content: data.reply,
         },
       ]);
+  
+      if (speakResponseEnabled && callActive) {
+        speakResponse(data.reply);
+      }
     } catch (err) {
-      setError(
-        err.message ||
-          "Something went wrong. Please try again."
-      );
+      const message =
+        err.message || "Something went wrong. Please try again.";
+  
+      if (speakResponseEnabled) {
+        setCallError(message);
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -406,10 +527,13 @@ export default function Home() {
                     </div>
                   )}
 
-                  <form
-                    onSubmit={sendMessage}
-                    className="border-t border-slate-100 p-4 md:p-6"
-                  >
+<form
+  onSubmit={(event) => {
+    event.preventDefault();
+    sendMessage(input);
+  }}
+  className="border-t border-slate-100 p-4 md:p-6"
+>
                     <div className="flex items-end gap-2">
                       <textarea
                         value={input}
@@ -424,7 +548,7 @@ export default function Home() {
                             event.currentTarget.form?.requestSubmit();
                           }
                         }}
-                        placeholder="Ask a health question... / आरोग्याबद्दल प्रश्न विचारा..."
+                        placeholder="Ask a health question..."
                         rows={2}
                         maxLength={8000}
                         disabled={loading}
@@ -450,78 +574,143 @@ export default function Home() {
               </section>
             )}
 
-            {activeTab === "call" && (
-              <section className="mx-auto max-w-3xl">
-                <button
-                  onClick={() => setActiveTab("home")}
-                  className="mb-6 text-sm font-medium text-teal-700 hover:underline"
-                >
-                  ← Back to Dashboard
-                </button>
+{activeTab === "call" && (
+  <section className="mx-auto max-w-3xl">
+    <button
+      onClick={() => {
+        endAICall();
+        setActiveTab("home");
+      }}
+      className="mb-6 text-sm font-medium text-teal-700 hover:underline"
+    >
+      ← Back to Dashboard
+    </button>
 
-                <div className="overflow-hidden rounded-3xl bg-slate-950 text-white">
-                  <div className="flex items-center justify-between border-b border-white/10 px-6 py-5">
-                    <div>
-                      <h2 className="font-semibold">
-                        MediGuide AI Call
-                      </h2>
-                      <p className="mt-1 text-xs text-slate-400">
-                        Private in-app voice experience
-                      </p>
-                    </div>
+    <div className="overflow-hidden rounded-3xl bg-slate-950 text-white">
+      <div className="flex items-center justify-between border-b border-white/10 px-6 py-5">
+        <div>
+          <h2 className="font-semibold">MediGuide AI Call</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            In-app voice health assistant
+          </p>
+        </div>
 
-                    <span className="rounded-full bg-amber-400/10 px-3 py-1.5 text-xs text-amber-300">
-                      UI preview
-                    </span>
-                  </div>
+        <span
+          className={`rounded-full px-3 py-1.5 text-xs ${
+            callActive
+              ? "bg-emerald-400/10 text-emerald-300"
+              : "bg-amber-400/10 text-amber-300"
+          }`}
+        >
+          {callActive ? "Call active" : "Not connected"}
+        </span>
+      </div>
 
-                  <div className="px-6 py-16 text-center md:py-20">
-                    <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-full border border-teal-300/30 bg-teal-400/10 text-5xl shadow-[0_0_60px_rgba(45,212,191,0.12)]">
-                      🩺
-                    </div>
+      <div className="px-6 py-12 text-center md:py-16">
+        <div
+          className={`mx-auto flex h-28 w-28 items-center justify-center rounded-full border text-5xl ${
+            listening
+              ? "animate-pulse border-teal-300 bg-teal-400/20"
+              : "border-teal-300/30 bg-teal-400/10"
+          }`}
+        >
+          {listening ? "🎙️" : "🩺"}
+        </div>
 
-                    <h3 className="mt-7 text-2xl font-bold">
-                      Your AI Health Assistant
-                    </h3>
+        <h3 className="mt-7 text-2xl font-bold">
+          Your AI Health Assistant
+        </h3>
 
-                    <p className="mt-2 text-sm text-slate-400">
-                      Ready to help you explore general health information.
-                    </p>
+        <p className="mt-2 text-sm text-slate-400">
+          {listening
+            ? "Listening... Speak clearly."
+            : loading
+              ? "MediGuide AI is preparing your response..."
+              : callActive
+                ? "Tap the microphone and ask your health question."
+                : "Start a call to speak with MediGuide AI."}
+        </p>
 
-                    <div className="mx-auto mt-8 inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-sm text-slate-300">
-                      <span className="h-2 w-2 rounded-full bg-amber-400" />
-                      Voice service not connected
-                    </div>
+        <div className="mx-auto mt-7 max-w-xs text-left">
+  <p className="mb-2 text-sm text-slate-300">
+    Conversation language
+  </p>
 
-                    <div className="mt-10 flex flex-wrap justify-center gap-4">
-                      <button
-                        onClick={() =>
-                          alert(
-                            "The call interface is ready for UI testing. Microphone and AI integration will be added in a later phase."
-                          )
-                        }
-                        className="rounded-xl bg-teal-500 px-6 py-3 font-semibold text-slate-950 transition hover:bg-teal-400"
-                      >
-                        Start AI Call
-                      </button>
+  <div className="w-full rounded-xl border border-white/15 bg-slate-900 px-4 py-3 text-sm text-white">
+    English (India)
+  </div>
+</div>
+        {callError && (
+          <p
+            role="alert"
+            className="mx-auto mt-5 max-w-md rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200"
+          >
+            {callError}
+          </p>
+        )}
 
-                      <button
-                        onClick={() => setActiveTab("chat")}
-                        className="rounded-xl border border-white/15 px-6 py-3 font-medium transition hover:bg-white/10"
-                      >
-                        Switch to Text Chat
-                      </button>
-                    </div>
-                  </div>
-                </div>
+        <div className="mt-8 flex flex-wrap justify-center gap-3">
+          {!callActive ? (
+            <button
+              onClick={startAICall}
+              className="rounded-xl bg-teal-400 px-6 py-3 font-semibold text-slate-950 transition hover:bg-teal-300"
+            >
+              Start AI Call
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={startListening}
+                disabled={listening || loading}
+                className="rounded-xl bg-teal-400 px-6 py-3 font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {listening
+                  ? "Listening..."
+                  : loading
+                    ? "Please wait..."
+                    : "🎙️ Tap to Speak"}
+              </button>
 
-                <p className="mt-4 text-xs leading-5 text-slate-500">
-                  This is an interface preview, not a working voice call.
-                  Microphone access, transcription, and speech output
-                  will be implemented and tested separately.
-                </p>
-              </section>
-            )}
+              <button
+                onClick={() => {
+                  if ("speechSynthesis" in window) {
+                    window.speechSynthesis.cancel();
+                  }
+                }}
+                className="rounded-xl border border-white/15 px-5 py-3 font-medium transition hover:bg-white/10"
+              >
+                Stop Audio
+              </button>
+
+              <button
+                onClick={endAICall}
+                className="rounded-xl bg-red-600 px-5 py-3 font-semibold transition hover:bg-red-500"
+              >
+                End Call
+              </button>
+            </>
+          )}
+
+          <button
+            onClick={() => {
+              endAICall();
+              setActiveTab("chat");
+            }}
+            className="rounded-xl border border-white/15 px-5 py-3 font-medium transition hover:bg-white/10"
+          >
+            Switch to Text Chat
+          </button>
+        </div>
+
+        <p className="mx-auto mt-7 max-w-lg text-xs leading-5 text-slate-400">
+          MediGuide provides general health information, not a diagnosis.
+          For a medical emergency in India, call 112. Voice recognition
+          and speech output depend on browser and device support.
+        </p>
+      </div>
+    </div>
+  </section>
+)}
 
             <footer className="mt-12 border-t border-slate-200 py-6 text-center text-xs leading-5 text-slate-400">
               MediGuide AI · Built for accessible health education
