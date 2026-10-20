@@ -125,9 +125,13 @@ function hasAge(text) {
   );
 }
 
+
 function hasDuration(text) {
   return (
     /\b(?:for|since|past|last)\s+\d+\s*(?:minutes?|hours?|days?|weeks?)\b/i.test(
+      text
+    ) ||
+    /\b(?:it\s+)?started\s+\d+\s+(?:minutes?|hours?|days?|weeks?)\s+ago\b/i.test(
       text
     ) ||
     /\b(since yesterday|since this morning|since last night|started today|started yesterday|for a few days|for several days)\b/i.test(
@@ -141,6 +145,7 @@ function hasDuration(text) {
     )
   );
 }
+
 
 function hasTemperature(text) {
   return (
