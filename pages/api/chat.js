@@ -580,6 +580,37 @@ async function generateResponseNode(state) {
   return { reply };
 }
 
+
+
+function hasUnsupportedDosage(reply, sources) {
+  const dosePattern =
+    /\b\d+(?:,\d{3})*(?:\.\d+)?\s*(?:mg|mcg|µg|g|ml|milligrams?|micrograms?|grams?|milliliters?)\b/gi;
+
+  const doseClaims = reply.match(dosePattern) || [];
+
+  if (doseClaims.length === 0) {
+    return false;
+  }
+
+  const evidence = sources
+    .map((source) => `${source.title || ""} ${source.content || ""}`)
+    .join(" ")
+    .toLowerCase()
+    .replace(/,/g, "")
+    .replace(/\s+/g, " ");
+
+  return doseClaims.some((claim) => {
+    const normalizedClaim = claim
+      .toLowerCase()
+      .replace(/,/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return !evidence.includes(normalizedClaim);
+  });
+}
+
+
 // Node 4: validate that the model returned user-facing text.
 function validateResponseNode(state) {
   const reply = cleanReply(state.reply);
@@ -590,6 +621,16 @@ function validateResponseNode(state) {
     );
     error.code = "CLOUDFLARE_EMPTY_RESPONSE";
     throw error;
+  }
+
+  if (
+    state.medicalQuery &&
+    hasUnsupportedDosage(reply, state.sources || [])
+  ) {
+    return {
+      reply:
+        "I can't safely verify the specific medicine dosage from the available medical sources. Please confirm the appropriate medicine and dose with a qualified doctor or pharmacist. Seek urgent care if your symptoms are severe or worsening.",
+    };
   }
 
   return { reply };
