@@ -10,7 +10,7 @@ Built with **Next.js, Cloudflare Workers AI, LangGraph.js, and Tavily**, the app
 
 ---
 
-## 📸 Screenshots
+## 📸 🖥️ Application Preview
 
 ### 1. Home Dashboard
 
