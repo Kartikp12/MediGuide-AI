@@ -1,3 +1,4 @@
+
 import { Annotation, StateGraph, START, END } from "@langchain/langgraph";
 
 const CLOUDFLARE_MODEL = "@cf/zai-org/glm-4.7-flash";
@@ -486,11 +487,31 @@ async function callCloudflareAI(messages) {
   return reply;
 }
 
-// LangGraph workflow: generate and return the assistant response.
+// LangGraph state shared between workflow nodes.
 const MediGuideState = Annotation.Root({
   messages: Annotation({
     reducer: (_current, update) => update,
     default: () => [],
+  }),
+  latestUserMessage: Annotation({
+    reducer: (_current, update) => update,
+    default: () => "",
+  }),
+  searchQuery: Annotation({
+    reducer: (_current, update) => update,
+    default: () => "",
+  }),
+  medicalQuery: Annotation({
+    reducer: (_current, update) => update,
+    default: () => false,
+  }),
+  sources: Annotation({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+  searchStatus: Annotation({
+    reducer: (_current, update) => update,
+    default: () => "not_required",
   }),
   systemPrompt: Annotation({
     reducer: (_current, update) => update,
@@ -502,23 +523,100 @@ const MediGuideState = Annotation.Root({
   }),
 });
 
+// Node 1: determine whether the latest request needs medical search.
+function routeRequest(state) {
+  const medicalQuery = isSymptomOrMedicineQuery(
+    state.latestUserMessage
+  );
+
+  const searchStatus = medicalQuery ? "pending" : "not_required";
+
+  const evidence = medicalQuery
+    ? "Medical search has not run yet. Search medical sources before generating a response."
+    : "No medical search was required for this request.";
+
+  return {
+    medicalQuery,
+    searchStatus,
+    sources: [],
+    systemPrompt:
+      `${SYSTEM_PROMPT}\n\n` +
+      `MEDICAL SEARCH STATUS: ${searchStatus}\n\n${evidence}`,
+  };
+}
+
+// Node 2: search trusted medical sources when needed.
+async function searchMedicalSourcesNode(state) {
+  const result = await searchMedicalSources(state.searchQuery);
+  const evidence = buildEvidenceContext(
+    result.sources,
+    result.status
+  );
+
+  return {
+    sources: result.sources,
+    searchStatus: result.status,
+    systemPrompt:
+      `${SYSTEM_PROMPT}\n\n` +
+      `MEDICAL SEARCH STATUS: ${result.status}\n\n${evidence}`,
+  };
+}
+
+// Node 3: generate the response using Cloudflare Workers AI.
+async function generateResponseNode(state) {
+  const reply = await callCloudflareAI([
+    {
+      role: "system",
+      content: state.systemPrompt,
+    },
+    ...state.messages,
+  ]);
+
+  return { reply };
+}
+
+// Node 4: validate that the model returned user-facing text.
+function validateResponseNode(state) {
+  const reply = cleanReply(state.reply);
+
+  if (!reply) {
+    const error = new Error(
+      "Cloudflare AI returned no user-facing text."
+    );
+    error.code = "CLOUDFLARE_EMPTY_RESPONSE";
+    throw error;
+  }
+
+  return { reply };
+}
+
+// Build the conditional LangGraph workflow.
 const mediGuideGraph = new StateGraph(MediGuideState)
-  .addNode("generate_response", async (state) => ({
-    reply: await callCloudflareAI([
-      {
-        role: "system",
-        content: state.systemPrompt,
-      },
-      ...state.messages,
-    ]),
-  }))
-  .addEdge(START, "generate_response")
-  .addEdge("generate_response", END)
+  .addNode("route_request", routeRequest)
+  .addNode("search_medical_sources", searchMedicalSourcesNode)
+  .addNode("generate_response", generateResponseNode)
+  .addNode("validate_response", validateResponseNode)
+  .addEdge(START, "route_request")
+  .addConditionalEdges(
+    "route_request",
+    (state) =>
+      state.medicalQuery
+        ? "search_medical_sources"
+        : "generate_response",
+    {
+      search_medical_sources: "search_medical_sources",
+      generate_response: "generate_response",
+    }
+  )
+  .addEdge("search_medical_sources", "generate_response")
+  .addEdge("generate_response", "validate_response")
+  .addEdge("validate_response", END)
   .compile();
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", ["POST"]);
+
     return res.status(405).json({
       error: "Method not allowed",
     });
@@ -553,6 +651,7 @@ export default async function handler(req, res) {
     });
   }
 
+  // Handle potential emergencies before any AI call.
   const emergencyReply = getEmergencyResponse(latestUserMessage);
 
   if (emergencyReply) {
@@ -566,7 +665,7 @@ export default async function handler(req, res) {
     });
   }
 
-  // Collect essential safety information before personalized medicine guidance.
+  // Request essential safety information before personalized medicine guidance.
   if (isSymptomOrMedicineQuery(latestUserMessage)) {
     const allUserText = getAllUserText(messages);
     const missing = getMissingIntake(allUserText);
@@ -593,27 +692,18 @@ export default async function handler(req, res) {
   const searchQuery = getAllUserText(messages).slice(-1500);
 
   let sources = [];
-  let searchStatus = "not_required";
-
-  if (medicalQuery) {
-    const result = await searchMedicalSources(searchQuery);
-    sources = result.sources;
-    searchStatus = result.status;
-  }
-
-  const evidence = medicalQuery
-    ? buildEvidenceContext(sources, searchStatus)
-    : "No medical search was required for this request.";
-
-  const systemPrompt =
-    `${SYSTEM_PROMPT}\n\n` +
-    `MEDICAL SEARCH STATUS: ${searchStatus}\n\n${evidence}`;
+  let searchStatus = medicalQuery ? "pending" : "not_required";
 
   try {
     const result = await mediGuideGraph.invoke({
       messages,
-      systemPrompt,
+      latestUserMessage,
+      searchQuery,
     });
+
+    sources = result.sources || [];
+    searchStatus =
+      result.searchStatus || (medicalQuery ? "unknown" : "not_required");
 
     const reply = appendSources(cleanReply(result.reply), sources);
 
@@ -622,7 +712,7 @@ export default async function handler(req, res) {
       model: CLOUDFLARE_MODEL,
       emergency: false,
       sources,
-      searchUsed: medicalQuery,
+      searchUsed: Boolean(result.medicalQuery),
       searchStatus,
     });
   } catch (error) {
